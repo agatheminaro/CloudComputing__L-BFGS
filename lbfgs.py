@@ -19,7 +19,7 @@ class LBFGS:
         self.m = m
         self.verbose = verbose
 
-    def _two_loops(self, grad_x, s_list, y_list, mu_list, B0):
+    def _two_loops(self, grad_x, s_list, y_list):
         """
         Parameters
         ----------
@@ -35,33 +35,35 @@ class LBFGS:
         y_list : list of length m
             the past m values of y
 
-        mu_list : list of length m
-            the past m values of mu
-
-        B0 : ndarray, shape (n, n)
-            Initial inverse Hessian guess
-
         Returns
         -------
-        r :  ndarray, shape (n,)
+        p :  ndarray, shape (n,)
             the L-BFGS direction
         """
-        q = grad_x.copy()
+        m = len(s_list)
+        p = -grad_x.copy()
         alpha_list = []
 
         # First loop
-        for i in range(len(s_list)):
-            alpha_list.append(mu_list[i] * s_list[i].T @ q)
-            q = q - alpha_list[-1] * y_list[i]
+        for i in reversed(range(m)):
+            y_i = y_list[i]
+            s_i = s_list[i]
+            alpha_i = s_i.T.dot(p) / (s_i.dot(y_i))
+            alpha_list.insert(0, alpha_i)
+            p -= alpha_i * y_i
 
-        r = np.dot(B0, q)
+        if m != 0:
+            gamma = y_list[-1].dot(s_list[-1]) / y_list[-1].dot(y_list[-1])
+            p *= gamma
 
         # Second loop
-        for i in range(len(s_list) - 1, -1, -1):
-            beta = mu_list[i] * y_list[i].T @ r
-            r = r + s_list[i] * (alpha_list[i] - beta)
+        for i in range(m):
+            y_i = y_list[i]
+            s_i = s_list[i]
+            beta = y_i.dot(p) / s_i.dot(y_i)
+            p += (alpha_list[i] - beta) * s_i
 
-        return -r
+        return p
 
     def __call__(self, x0, f, f_grad, f_hessian=None):
         all_x_k, all_f_k = list(), list()
@@ -70,15 +72,13 @@ class LBFGS:
         all_x_k.append(x.copy())
         all_f_k.append(f(x))
 
-        B0 = np.eye(len(x))  # Hessian approximation
-
         grad_x = f_grad(x)
 
-        y_list, s_list, mu_list = [], [], []
+        y_list, s_list = [], []
 
         for k in range(1, self.max_iter + 1):
             # Step 1: compute step the direction
-            d = self._two_loops(grad_x, s_list, y_list, mu_list, B0)
+            d = self._two_loops(grad_x, s_list, y_list)
 
             # Step 2: compute step size
             step, _, _, new_f, _, new_grad = optimize.line_search(
@@ -93,16 +93,14 @@ class LBFGS:
             s = step * d
             x += s
             y = new_grad - grad_x
-            mu = 1 / np.dot(y, s)
 
             # Step 4: update memory
             y_list.append(y.copy())
             s_list.append(s.copy())
-            mu_list.append(mu)
+
             if len(y_list) > self.m:
                 y_list.pop(0)
                 s_list.pop(0)
-                mu_list.pop(0)
 
             all_x_k.append(x.copy())
             all_f_k.append(new_f)
