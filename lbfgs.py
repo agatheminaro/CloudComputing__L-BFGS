@@ -1,23 +1,29 @@
 import numpy as np
-from scipy import optimize
+from time import time
 
 
 class LBFGS:
     def __init__(
         self,
+        f,
+        f_grad,
         default_step=0.01,
         c1=0.0001,
         c2=0.9,
         max_iter=100,
         m=2,
         verbose=False,
+        vector_free=False,
     ) -> None:
+        self.f = f
+        self.f_grad = f_grad
         self.default_step = default_step
         self.c1 = c1
         self.c2 = c2
         self.max_iter = max_iter
         self.m = m
         self.verbose = verbose
+        self.vector_free = vector_free
 
     def _two_loops(self, grad_x, s_list, y_list):
         """
@@ -65,81 +71,6 @@ class LBFGS:
 
         return p
 
-    def __call__(self, x0, f, f_grad, f_hessian=None):
-        all_x_k, all_f_k = list(), list()
-        x = x0
-
-        all_x_k.append(x.copy())
-        all_f_k.append(f(x))
-
-        grad_x = f_grad(x)
-
-        y_list, s_list = [], []
-
-        for k in range(1, self.max_iter + 1):
-            # Step 1: compute step the direction
-            d = self._two_loops(grad_x, s_list, y_list)
-
-            # Step 2: compute step size
-            step, _, _, new_f, _, new_grad = optimize.line_search(
-                f, f_grad, x, d, grad_x, c1=self.c1, c2=self.c2
-            )
-
-            if step is None:
-                print("Line search did not converge at iteration {}".format(k))
-                step = self.default_step
-
-            # Step 3: update x
-            s = step * d
-            x += s
-            y = new_grad - grad_x
-
-            # Step 4: update memory
-            y_list.append(y.copy())
-            s_list.append(s.copy())
-
-            if len(y_list) > self.m:
-                y_list.pop(0)
-                s_list.pop(0)
-
-            all_x_k.append(x.copy())
-            all_f_k.append(new_f)
-
-            l_inf_norm_grad = np.max(np.abs(new_grad))
-
-            if self.verbose:
-                print(
-                    "iter: {} | f: {:.5f} | step: {:.5f} | ||grad||_inf: {:.5f}".format(
-                        k, new_f, step, l_inf_norm_grad
-                    )
-                )
-
-            if l_inf_norm_grad < 1e-5:
-                break
-
-            # Step 5: update gradient
-            grad_x = new_grad
-
-        return np.array(all_x_k), np.array(all_f_k)
-
-
-class VLBFGS:
-    def __init__(
-        self,
-        default_step=0.1,
-        c1=0.0001,
-        c2=0.9,
-        max_iter=100,
-        m=2,
-        verbose=False,
-    ) -> None:
-        self.default_step = default_step
-        self.c1 = c1
-        self.c2 = c2
-        self.max_iter = max_iter
-        self.m = m
-        self.verbose = verbose
-
     def _vector_free_two_loops(self, dot_product_matrix, b):
         """
         Parameters
@@ -147,23 +78,26 @@ class VLBFGS:
         dot_matrix : ndarray, shape (2m + 1, 2m + 1)
             the results of dot products between every
             two base vectors as a scalar matrix of
-            (2m + 1) ∗ (2m + 1) scalars
+            (2m + 1) * (2m + 1) scalars
+
+        b : ndarray, shape (2m + 1, n)
+            all memory vectors and current gradient
 
         Returns
         -------
-        delta :  ndarray, shape (m,)
-            coefficients
+        r : ndarray, shape (n,)
+            the L-BFGS direction
         """
         m = int((dot_product_matrix.shape[0] - 1) / 2)
 
         alpha_list = []
-        delta = np.zeros((2 * m + 1,))
+        delta = np.zeros(2 * m + 1)
         delta[2 * m] = -1
 
         # First loop
         for i in reversed(range(m)):
             alpha_i = (
-                np.sum(delta * dot_product_matrix[i:,]) / dot_product_matrix[i, m + i]
+                np.sum(delta * dot_product_matrix[i, :]) / dot_product_matrix[i, m + i]
             )
             alpha_list.insert(0, alpha_i)
             delta[m + i] -= alpha_i
@@ -190,10 +124,32 @@ class VLBFGS:
         return r
 
     def _dot_product(self, grad_x, s_list, y_list):
-        m = len(s_list)
-        n_features = grad_x.shape[0]
+        """
+        Parameters
+        ----------
+        grad_x : ndarray, shape (n,)
+            gradient at the current point
 
-        b = np.zeros((2 * m + 1, n_features))
+        s_list : list of length m
+            the past m values of s
+
+        y_list : list of length m
+            the past m values of y
+
+        Returns
+        -------
+        dot_matrix : ndarray, shape (2m + 1, 2m + 1)
+            the results of dot products between every
+            two base vectors as a scalar matrix of
+            (2m + 1) * (2m + 1) scalars
+
+        b : ndarray, shape (2m + 1, n)
+            all memory vectors and current gradient
+        """
+        m = len(s_list)
+        n = grad_x.shape[0]
+
+        b = np.zeros((2 * m + 1, n))
 
         for i, tensor in enumerate(s_list):
             b[i, :] = tensor
@@ -207,32 +163,135 @@ class VLBFGS:
 
         return dot_matrix, b
 
-    def __call__(self, x0, f, f_grad, f_hessian=None):
+    def _line_search(self, f, f_grad, current_f, grad_x, x, d, A, b, lbda, c1, c2):
+        """
+        Parameters
+        ----------
+        f : callable
+            objective function
+
+        f_grad : callable
+            gradient of the objective function
+
+        current_f : float
+            objective function value at the current point
+
+        grad_x : ndarray, shape (n,)
+            gradient at the current point
+
+        x : ndarray, shape (n,)
+            current point
+
+        d : ndarray, shape (n,)
+            descent direction
+
+        A : ndarray, shape (m, n)
+            matrix of the linear constraint
+
+        b : ndarray, shape (m,)
+            vector of the linear constraint
+
+        lbda : float
+            regularization parameter
+
+        c1 : float
+            parameter for Armijo condition
+
+        c2 : float
+            parameter for Wolfe condition
+
+        Returns
+        -------
+        step : float
+            step size
+
+        new_f : float
+            objective function value at the new point
+
+        new_grad : ndarray, shape (n,)
+            gradient at the new point
+        """
+
+        alpha = 0
+        beta = "inf"
+        step = self.default_step
+
+        for _ in range(10):
+            new_f = f(x + step * d, A, b, lbda)
+            f1 = current_f + c1 * step * grad_x.dot(d)
+
+            new_grad = f_grad(x + step * d, A, b, lbda)
+
+            f2 = new_grad.dot(d)
+            f3 = c2 * grad_x.dot(d)
+
+            if new_f > f1:  # Armijo condition
+                beta = step
+                step = (alpha + beta) / 2
+
+            elif f2 < f3:  # Wolfe condition
+                alpha = step
+                if beta == "inf":
+                    step = 2 * alpha
+                else:
+                    step = (alpha + beta) / 2
+            else:
+                break
+
+        return step, new_f, new_grad
+
+    def fit(self, x0, A, target, lbda):
+        """
+        Parameters
+        ----------
+        x0 : ndarray, shape (n,)
+            initial point
+
+        A : ndarray, shape (m, n)
+            matrix of the linear constraint
+
+        target : ndarray, shape (m,)
+            vector of the linear constraint
+
+        lbda : float
+            regularization parameter
+        """
+        t0 = time()
         all_x_k, all_f_k = list(), list()
-        x = x0
+        x = x0.copy()
 
         all_x_k.append(x.copy())
-        all_f_k.append(f(x))
 
-        grad_x = f_grad(x)
-        new_f = f(x)
+        new_f = self.f(x, A, target, lbda)
+        all_f_k.append(new_f)
+
+        grad_x = self.f_grad(x, A, target, lbda)
 
         y_list, s_list = [], []
 
         for k in range(1, self.max_iter + 1):
             # Step 1: compute step the direction
-            dot_product_matrix, b = self._dot_product(grad_x, s_list, y_list)
-            d = self._vector_free_two_loops(dot_product_matrix, b)
+            if self.vector_free:
+                dot_product_matrix, b = self._dot_product(grad_x, s_list, y_list)
+                d = self._vector_free_two_loops(dot_product_matrix, b)
 
-            # Step 2: compute step size
-            step, _, _, new_f, _, new_grad = optimize.line_search(
-                f, f_grad, x, d, grad_x, c1=self.c1, c2=self.c2
+            else:
+                d = self._two_loops(grad_x, s_list, y_list)
+
+            # Step 2: line search
+            step, new_f, new_grad = self._line_search(
+                self.f,
+                self.f_grad,
+                new_f,
+                grad_x,
+                x,
+                d,
+                A,
+                target,
+                lbda,
+                self.c1,
+                self.c2,
             )
-
-            if step is None:
-                print("Line search did not converge at iteration {}".format(k))
-                step = self.default_step
-                continue
 
             # Step 3: update x
             s = step * d
@@ -265,4 +324,7 @@ class VLBFGS:
             # Step 5: update gradient
             grad_x = new_grad
 
-        return np.array(all_x_k), np.array(all_f_k)
+        t1 = time()
+        computation_time = t1 - t0
+
+        return np.array(all_x_k), np.array(all_f_k), computation_time
