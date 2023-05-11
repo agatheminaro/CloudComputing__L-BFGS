@@ -4,3 +4,5 @@ matplotlib
 scipy
 ipykernel
 scikit-learn
+torch
+tqdm

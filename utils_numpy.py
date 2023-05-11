@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.random import randn, multivariate_normal
 from scipy.linalg import norm, toeplitz
-from lbfgs import LBFGS
+from lbfgs_numpy import LBFGS
 
 
 def simulate_data(coefs, n, std=1.0, corr=0.5, log_reg=False):
