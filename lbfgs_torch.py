@@ -1,4 +1,3 @@
-import numpy as np
 from time import time
 import torch
 
@@ -91,7 +90,7 @@ class LBFGS:
         r : ndarray, shape (n,)
             the L-BFGS direction
         """
-        m = int((dot_product_matrix.size(0) - 1) / 2)
+        m = int((dot_product_matrix.shape[0] - 1) / 2)
 
         alpha_list = []
         delta = torch.zeros((2 * m + 1)).to(self.device)
@@ -153,7 +152,7 @@ class LBFGS:
             all memory vectors and current gradient
         """
         m = len(s_list)
-        n = grad_x.size(0)
+        n = grad_x.shape[0]
 
         b = torch.empty((2 * m + 1, n)).to(self.device)
 
