@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.random import randn, multivariate_normal
 from scipy.linalg import norm, toeplitz
-from lbfgs_numpy import LBFGS
+from lbfgs import LBFGS
 import torch
 
 
