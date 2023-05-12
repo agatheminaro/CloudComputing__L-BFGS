@@ -1,6 +1,7 @@
 import numpy as np
 from time import time
 import torch
+from tqdm import tqdm
 
 
 class LBFGS:
@@ -382,7 +383,7 @@ class LBFGS:
 
             y_list, s_list = [], []
 
-            for k in range(1, self.max_iter + 1):
+            for k in tqdm(range(1, self.max_iter + 1)):
                 # Step 1: compute step the direction
                 if self.vector_free:
                     dot_product_matrix, b = self._dot_product(grad_x, s_list, y_list)
@@ -459,7 +460,7 @@ class LBFGS:
 
             y_list, s_list = [], []
 
-            for k in range(1, self.max_iter + 1):
+            for k in tqdm(range(1, self.max_iter + 1)):
                 # Step 1: compute step the direction
                 if self.vector_free:
                     dot_product_matrix, b = self._dot_product(grad_x, s_list, y_list)
