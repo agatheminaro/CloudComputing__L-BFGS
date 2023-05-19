@@ -77,6 +77,7 @@ class LBFGS:
                 p += (alpha_list[i] - beta) * s_i
 
             return p
+
         else:
             m = len(s_list)
             p = -grad_x.copy()
@@ -102,6 +103,62 @@ class LBFGS:
                 p += (alpha_list[i] - beta) * s_i
 
             return p
+
+    def _dot_product(self, grad_x, s_list, y_list):
+        """
+        Parameters
+        ----------
+        grad_x : ndarray, shape (n,)
+            gradient at the current point
+
+        s_list : list of length m
+            the past m values of s
+
+        y_list : list of length m
+            the past m values of y
+
+        Returns
+        -------
+        dot_matrix : ndarray, shape (2m + 1, 2m + 1)
+            the results of dot products between every
+            two base vectors as a scalar matrix of
+            (2m + 1) * (2m + 1) scalars
+
+        b : ndarray, shape (2m + 1, n)
+            all memory vectors and current gradient
+        """
+        m = len(s_list)
+        n = grad_x.shape[0]
+
+        if self.torch:
+            b = torch.empty((2 * m + 1, n)).to(self.device)
+
+            for i, tensor in enumerate(s_list):
+                b[i, :] = tensor
+
+            for i, tensor in enumerate(y_list):
+                b[m + i, :] = tensor
+
+            b[2 * m, :] = grad_x
+
+            dot_matrix = b.matmul(b.transpose(0, 1))
+
+            return dot_matrix, b
+
+        else:
+            b = np.zeros((2 * m + 1, n))
+
+            for i, tensor in enumerate(s_list):
+                b[i, :] = tensor
+
+            for i, tensor in enumerate(y_list):
+                b[m + i, :] = tensor
+
+            b[2 * m, :] = grad_x
+
+            dot_matrix = b.dot(b.T)
+
+            return dot_matrix, b
 
     def _vector_free_two_loops(self, dot_product_matrix, b):
         """
@@ -192,62 +249,6 @@ class LBFGS:
             r = b.sum(axis=0)
 
             return r
-
-    def _dot_product(self, grad_x, s_list, y_list):
-        """
-        Parameters
-        ----------
-        grad_x : ndarray, shape (n,)
-            gradient at the current point
-
-        s_list : list of length m
-            the past m values of s
-
-        y_list : list of length m
-            the past m values of y
-
-        Returns
-        -------
-        dot_matrix : ndarray, shape (2m + 1, 2m + 1)
-            the results of dot products between every
-            two base vectors as a scalar matrix of
-            (2m + 1) * (2m + 1) scalars
-
-        b : ndarray, shape (2m + 1, n)
-            all memory vectors and current gradient
-        """
-        m = len(s_list)
-        n = grad_x.shape[0]
-
-        if self.torch:
-            b = torch.empty((2 * m + 1, n)).to(self.device)
-
-            for i, tensor in enumerate(s_list):
-                b[i, :] = tensor
-
-            for i, tensor in enumerate(y_list):
-                b[m + i, :] = tensor
-
-            b[2 * m, :] = grad_x
-
-            dot_matrix = b.matmul(b.transpose(0, 1))
-
-            return dot_matrix, b
-
-        else:
-            b = np.zeros((2 * m + 1, n))
-
-            for i, tensor in enumerate(s_list):
-                b[i, :] = tensor
-
-            for i, tensor in enumerate(y_list):
-                b[m + i, :] = tensor
-
-            b[2 * m, :] = grad_x
-
-            dot_matrix = b.dot(b.T)
-
-            return dot_matrix, b
 
     def _line_search(self, f, f_grad, current_f, grad_x, x, d, A, b, lbda, c1, c2):
         """
